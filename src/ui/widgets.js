@@ -29,7 +29,7 @@ function createWidgets(grid, startRow = 0) {
     columnSpacing: 2,
     columnWidth: [15, 25],
   });
-  t;
+
   widgets.pointsGauge = grid.set(startRow + 6, 4, 3, 2, contrib.gauge, {
     label: "Points",
     percent: 0,
