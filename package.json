@@ -1,0 +1,29 @@
+{
+  "name": "klok-bot",
+  "version": "1.0.0",
+  "description": "Terminal-based automation tool for KlokApp AI chat with session token authentication and resilient retry mechanism.",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WINGFO-HQ/Klok-BOT.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/WINGFO-HQ/Klok-BOT/issues"
+  },
+  "homepage": "https://github.com/WINGFO-HQ/Klok-BOT#readme",
+  "dependencies": {
+    "axios": "^1.7.9",
+    "blessed": "^0.1.81",
+    "blessed-contrib": "^4.11.0",
+    "crypto": "^1.0.1",
+    "date-fns": "^4.1.0",
+    "groq-sdk": "^0.15.0"
+  }
+}
