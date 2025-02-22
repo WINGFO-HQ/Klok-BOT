@@ -21,6 +21,9 @@ const RETRY_MULTIPLIER = 1.5;
 let sessionToken = null;
 let cachedUserInfo = null;
 
+let allTokens = [];
+let currentTokenIndex = 0;
+
 /**
  * @returns {string|null}
  */
@@ -29,27 +32,94 @@ function getSessionToken() {
 }
 
 /**
- * @returns {string|null}
+ * @returns {Object}
  */
-function readSessionTokenFromFile() {
+function getTokenInfo() {
+  return {
+    currentIndex: currentTokenIndex,
+    totalTokens: allTokens.length,
+    hasMultipleTokens: allTokens.length > 1,
+  };
+}
+
+/**
+ * @returns {Array<string>}
+ */
+function readAllSessionTokensFromFile() {
   try {
     if (fileExists(SESSION_TOKEN_PATH)) {
-      const token = readFile(SESSION_TOKEN_PATH);
-      if (token && token.trim().length > 0) {
-        logToFile("Read session token from file", {
-          tokenLength: token.length,
-          tokenPreview: token.substring(0, 10) + "...",
+      const fileContent = readFile(SESSION_TOKEN_PATH);
+      if (fileContent && fileContent.trim().length > 0) {
+        const tokens = fileContent
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0);
+
+        logToFile("Read session tokens from file", {
+          tokenCount: tokens.length,
+          tokenPreview: tokens.map((t) => t.substring(0, 10) + "..."),
         });
-        return token.trim();
+
+        return tokens;
       }
     }
-    return null;
+    return [];
   } catch (error) {
-    logToFile("Error reading session token from file", {
+    logToFile("Error reading session tokens from file", {
       error: error.message,
     });
+    return [];
+  }
+}
+
+/**
+ * @returns {string|null}
+ */
+function getCurrentSessionToken() {
+  if (allTokens.length === 0) {
+    allTokens = readAllSessionTokensFromFile();
+    currentTokenIndex = 0;
+  }
+
+  if (allTokens.length === 0) {
     return null;
   }
+
+  if (currentTokenIndex >= allTokens.length) {
+    currentTokenIndex = 0;
+  }
+
+  return allTokens[currentTokenIndex];
+}
+
+/**
+ * @returns {string|null}
+ */
+function switchToNextToken() {
+  if (allTokens.length === 0) {
+    allTokens = readAllSessionTokensFromFile();
+  }
+
+  if (allTokens.length === 0) {
+    return null;
+  }
+
+  currentTokenIndex = (currentTokenIndex + 1) % allTokens.length;
+  sessionToken = allTokens[currentTokenIndex];
+
+  log(
+    `Switched to account ${currentTokenIndex + 1}/${allTokens.length}`,
+    "info"
+  );
+  logToFile(`Switched to next token`, {
+    newIndex: currentTokenIndex,
+    totalTokens: allTokens.length,
+    tokenPreview: sessionToken.substring(0, 10) + "...",
+  });
+
+  cachedUserInfo = null;
+
+  return sessionToken;
 }
 
 /**
@@ -86,6 +156,25 @@ async function executeWithRetry(requestFn, requestName, retryCount = 0) {
 
     const isServerError = error.response && error.response.status >= 500;
 
+    const isAuthError =
+      error.response &&
+      (error.response.status === 401 || error.response.status === 403);
+
+    if (isAuthError && allTokens.length > 1) {
+      logToFile(
+        `Auth error with current token, switching to next token`,
+        {
+          error: error.message,
+          previousTokenIndex: currentTokenIndex,
+        },
+        false
+      );
+
+      switchToNextToken();
+
+      return executeWithRetry(requestFn, `${requestName} (with new token)`, 0);
+    }
+
     if ((isNetworkError || isServerError) && retryCount < MAX_RETRIES) {
       const nextRetryCount = retryCount + 1;
       const delay = RETRY_DELAY_MS * Math.pow(RETRY_MULTIPLIER, retryCount);
@@ -113,26 +202,32 @@ async function executeWithRetry(requestFn, requestName, retryCount = 0) {
 }
 
 /**
+ * @param {boolean} switchToken
  * @throws {Error}
  * @returns {Promise<string>}
  */
-async function login() {
+async function login(switchToken = false) {
   try {
     log("Starting login with session token...", "info");
     logToFile("Starting login with session token");
 
-    const token = readSessionTokenFromFile();
+    if (switchToken || !sessionToken) {
+      if (switchToken) {
+        switchToNextToken();
+      } else {
+        sessionToken = getCurrentSessionToken();
+      }
+    }
 
-    if (!token) {
+    if (!sessionToken) {
       const error = new Error(
-        "No session token found. Please add session-token.key file."
+        "No session token found. Please add session-token.key file with at least one token."
       );
       log(error.message, "error");
-      logToFile("Login failed - no token file");
+      logToFile("Login failed - no token file or empty file");
       throw error;
     }
 
-    sessionToken = token;
     log("Session token loaded", "info");
 
     log("Validating session token...", "info");
@@ -148,15 +243,32 @@ async function login() {
       return response.data;
     };
 
-    await executeWithRetry(validateRequest, "Token validation");
+    try {
+      await executeWithRetry(validateRequest, "Token validation");
 
-    log("Session token is valid!", "success");
-    logToFile("Login successful with session token", {
-      userId: cachedUserInfo.user_id,
-      authProvider: cachedUserInfo.auth_provider,
-    });
+      log(
+        `Session token is valid! Account ${currentTokenIndex + 1}/${
+          allTokens.length
+        }`,
+        "success"
+      );
+      logToFile("Login successful with session token", {
+        userId: cachedUserInfo.user_id,
+        authProvider: cachedUserInfo.auth_provider,
+        tokenIndex: currentTokenIndex,
+        totalTokens: allTokens.length,
+      });
 
-    return sessionToken;
+      return sessionToken;
+    } catch (error) {
+      if (allTokens.length > 1) {
+        log("Token invalid, trying next token...", "warning");
+        switchToNextToken();
+        return login(false);
+      }
+
+      throw error;
+    }
   } catch (error) {
     const errorMsg = `Login failed: ${error.message}`;
     log(errorMsg, "error");
@@ -214,9 +326,10 @@ async function getUserInfo(useCache = false) {
 }
 
 /**
+ * Helper function to make any API request with retry
  * @param {string} method
  * @param {string} endpoint
- * @param {Object} data
+ * @param {Object} data -
  * @param {Object} additionalHeaders
  * @returns {Promise<Object>}
  */
@@ -270,7 +383,10 @@ module.exports = {
   getUserInfo,
   getSessionToken,
   getAuthHeaders,
-  readSessionTokenFromFile,
+  getCurrentSessionToken,
+  getTokenInfo,
+  switchToNextToken,
   makeApiRequest,
   executeWithRetry,
+  readAllSessionTokensFromFile,
 };

@@ -10,6 +10,7 @@ let rateLimitInfo = {
 };
 
 let cooldownActive = false;
+let cooldownTimer = null;
 
 /**
  * @returns {Promise<Object>}
@@ -21,7 +22,6 @@ async function getRateLimit() {
 
     const response = await makeApiRequest("GET", "/rate-limit");
 
-    // Update rate limit tracking
     rateLimitInfo = {
       limit: response.limit,
       remaining: response.remaining,
@@ -85,6 +85,28 @@ async function checkRateLimitAvailability() {
 }
 
 /**
+ * Cancel current cooldown if active
+ * @returns {boolean}
+ */
+function cancelCooldown() {
+  if (!cooldownActive) {
+    return false;
+  }
+
+  if (cooldownTimer) {
+    clearTimeout(cooldownTimer);
+    cooldownTimer = null;
+  }
+
+  cooldownActive = false;
+  log("Cooldown cancelled", "info");
+  logToFile("Cooldown cancelled manually");
+
+  return true;
+}
+
+/**
+ * Start cooldown timer
  * @param {Function} onComplete
  * @returns {Promise<boolean>}
  */
@@ -125,8 +147,9 @@ async function startCooldown(onComplete) {
     });
 
     return new Promise((resolve) => {
-      setTimeout(() => {
+      cooldownTimer = setTimeout(() => {
         cooldownActive = false;
+        cooldownTimer = null;
         log("Cooldown complete!", "success");
         logToFile("Cooldown complete!");
 
@@ -167,6 +190,7 @@ module.exports = {
   getRateLimit,
   checkRateLimitAvailability,
   startCooldown,
+  cancelCooldown,
   isCooldownActive,
   getLastKnownRateLimit,
 };

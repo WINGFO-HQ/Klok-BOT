@@ -5,7 +5,10 @@ const points = require("./points");
 const rateLimit = require("./rate-limit");
 
 module.exports = {
-  auth,
+  auth: {
+    ...auth,
+    readAllSessionTokensFromFile: auth.readAllSessionTokensFromFile,
+  },
   chat,
   models,
   points,
