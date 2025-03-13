@@ -1,3 +1,5 @@
+const dotenv = require("dotenv");
+const { authenticateAllWallets } = require("./src/api/signin");
 const {
   initDashboard,
   registerKeyHandler,
@@ -10,6 +12,7 @@ const {
   startAutomation,
   pauseAutomation,
   resumeAutomation,
+  manualSwitchAccount,
   getRunningState,
 } = require("./src/automation");
 const { auth } = require("./src/api");
@@ -21,6 +24,8 @@ const {
   backupLogFile,
 } = require("./src/utils");
 
+dotenv.config();
+
 async function main() {
   try {
     checkLogSize();
@@ -31,31 +36,84 @@ async function main() {
     log("Press S to start, P to pause, R to resume, H for help", "info");
     logToFile("KlokApp Chat Automation started");
 
-    const hasSessionFile = auth.readSessionTokenFromFile() !== null;
-    if (hasSessionFile) {
-      log("Session token file found! Ready for login.", "success");
+    const validTokenCount = await auth.verifyAndCleanupTokens();
+
+    if (validTokenCount === 0) {
+      log(
+        "No valid session tokens found. Attempting to authenticate...",
+        "info"
+      );
+      updateStatus("Authenticating...", "info");
+      render();
+
+      const privateKeys = process.env.PRIVATE_KEYS
+        ? process.env.PRIVATE_KEYS.split(",")
+        : [];
+      if (privateKeys.length === 0) {
+        log("No private keys found in .env file.", "error");
+        updateStatus("Missing private keys in .env file", "error");
+      } else {
+        log(
+          `Found ${privateKeys.length} private keys. Authenticating...`,
+          "info"
+        );
+
+        await authenticateAllWallets(privateKeys);
+
+        const tokens = auth.readAllSessionTokensFromFile();
+
+        if (tokens.length === 0) {
+          log("Authentication failed. No valid tokens received.", "error");
+          updateStatus("Authentication failed", "error");
+        } else {
+          log(
+            `Authentication successful! ${tokens.length} accounts ready.`,
+            "success"
+          );
+          updateStatus(
+            `${tokens.length} accounts ready. Press S to start`,
+            "success"
+          );
+        }
+      }
+    } else if (validTokenCount === 1) {
+      log("One valid session token found! Ready for login.", "success");
       updateStatus("Session token ready. Press S to start", "success");
     } else {
       log(
-        "No session token file found. Please add session-token.key file.",
-        "warning"
+        `${validTokenCount} valid session tokens found! Ready for login.`,
+        "success"
       );
-      updateStatus("Missing session-token.key file", "warning");
+      updateStatus(
+        `${validTokenCount} accounts ready. Press S to start`,
+        "success"
+      );
     }
 
     render();
 
     await initAutomation();
 
-    registerKeyHandler("s", () => {
+    registerKeyHandler("s", async () => {
       if (!getRunningState()) {
-        const sessionToken = auth.readSessionTokenFromFile();
-        if (!sessionToken) {
+        const tokens = auth.readAllSessionTokensFromFile();
+        if (tokens.length === 0) {
           log(
-            "No session token file found. Please add session-token.key file.",
+            "No session tokens found. Please add session-token.key file.",
             "error"
           );
           updateStatus("Missing session-token.key", "error");
+          render();
+          return;
+        }
+
+        const isValid = await auth.verifyToken(tokens[0]);
+        if (!isValid) {
+          log(
+            "Session tokens are expired. Re-authentication required.",
+            "error"
+          );
+          updateStatus("Expired tokens. Press 'A' to re-authenticate", "error");
           render();
           return;
         }
@@ -91,6 +149,55 @@ async function main() {
       }
     });
 
+    registerKeyHandler("a", async () => {
+      const tokenInfo = auth.getTokenInfo();
+      if (getRunningState()) {
+        log("Manually switching account...", "info");
+        logToFile("Manual account switch initiated");
+
+        const success = await manualSwitchAccount();
+        if (success) {
+          log("Account switched successfully", "success");
+        } else {
+          log("Failed to switch account", "error");
+        }
+      } else {
+        if (tokenInfo.hasMultipleTokens) {
+          log("Only one account available, cannot switch", "warning");
+          return;
+        }
+
+        log("Re-authenticating accounts...", "info");
+        logToFile("Re-authentication initiated");
+        updateStatus("Re-authenticating...", "info");
+        render();
+
+        const privateKeys = process.env.PRIVATE_KEYS
+          ? process.env.PRIVATE_KEYS.split(",")
+          : [];
+        if (privateKeys.length === 0) {
+          log("No private keys found in .env file.", "error");
+          updateStatus("Missing private keys in .env file", "error");
+        } else {
+          await authenticateAllWallets(privateKeys);
+          const tokens = auth.readAllSessionTokensFromFile();
+          if (tokens.length > 0) {
+            log(
+              `Re-authentication successful! ${tokens.length} accounts ready.`,
+              "success"
+            );
+            updateStatus(
+              `${tokens.length} accounts ready. Press S to start`,
+              "success"
+            );
+          } else {
+            log("Re-authentication failed. No valid tokens received.", "error");
+            updateStatus("Re-authentication failed", "error");
+          }
+        }
+      }
+    });
+
     registerKeyHandler("l", () => {
       const backupPath = backupLogFile();
       clearLogFile();
@@ -116,10 +223,9 @@ async function main() {
           const lastModified = new Date(stats.mtime).toLocaleString();
 
           log(
-            `Log file info: Size=${fileSizeMB}MB, Last Modified: ${lastModified}`,
+            `Log file: Size=${fileSizeMB}MB, Last Modified: ${lastModified}`,
             "info"
           );
-          updateStatus(`Log file: ${fileSizeMB}MB`, "info");
         } else {
           log("Log file does not exist yet", "info");
         }
@@ -128,23 +234,32 @@ async function main() {
       }
 
       try {
-        const sessionTokenPath = path.join(process.cwd(), "session-token.key");
-        if (fs.existsSync(sessionTokenPath)) {
-          const stats = fs.statSync(sessionTokenPath);
-          const lastModified = new Date(stats.mtime).toLocaleString();
+        const tokens = auth.readAllSessionTokensFromFile();
+        const tokenInfo = auth.getTokenInfo();
+
+        if (tokens.length === 0) {
+          log("No accounts found", "warning");
+        } else if (tokens.length === 1) {
+          log("1 account configured", "info");
+        } else {
           log(
-            `Session token file exists, last modified: ${lastModified}`,
+            `${tokens.length} accounts configured, current: ${
+              tokenInfo.currentIndex + 1
+            }/${tokenInfo.totalTokens}`,
             "info"
           );
-        } else {
-          log("No session token file found", "warning");
         }
       } catch (error) {
-        log(`Error checking session token: ${error.message}`, "error");
+        log(`Error checking accounts: ${error.message}`, "error");
       }
 
+      updateStatus("Info displayed", "info");
+
       setTimeout(() => {
-        updateStatus("Running", getRunningState() ? "success" : "warning");
+        updateStatus(
+          getRunningState() ? "Running" : "Ready",
+          getRunningState() ? "success" : "info"
+        );
         render();
       }, 5000);
 
@@ -153,11 +268,15 @@ async function main() {
 
     registerKeyHandler("h", () => {
       log("Controls:", "info");
-      log("S - Start automation", "info");
+      log("S - Start automation (requires at least one session token)", "info");
       log("P - Pause automation", "info");
       log("R - Resume automation", "info");
+      log(
+        "A - When running: Switch to next account; When stopped: Re-authenticate",
+        "info"
+      );
       log("L - Clear log file and make backup", "info");
-      log("I - Show file information", "info");
+      log("I - Show file and account information", "info");
       log("H - Show this help", "info");
       log("Q or Esc - Quit application", "info");
 

@@ -73,6 +73,98 @@ function readAllSessionTokensFromFile() {
 }
 
 /**
+ * @param {string}
+ * @returns {Promise<boolean>}
+ */
+async function verifyToken(token) {
+  try {
+    log("Verifying token validity...", "info");
+    logToFile("Verifying token validity");
+
+    const headers = {
+      ...config.DEFAULT_HEADERS,
+      "X-Session-Token": token,
+    };
+
+    const verifyRequest = async () => {
+      logApiRequest("GET", `${config.BASE_URL}/me`, null, headers);
+
+      const response = await axios.get(`${config.BASE_URL}/me`, {
+        headers: headers,
+        timeout: 10000,
+      });
+
+      logApiResponse("/me", response.data, response.status, response.headers);
+      return response.status === 200;
+    };
+
+    return await executeWithRetry(verifyRequest, "Token verification");
+  } catch (error) {
+    log(`Token verification failed: ${error.message}`, "warning");
+    logToFile("Token verification failed", { error: error.message });
+    return false;
+  }
+}
+
+/**
+ * @returns {Promise<number>}
+ */
+async function verifyAndCleanupTokens() {
+  try {
+    log("Verifying and cleaning up tokens...", "info");
+    logToFile("Starting token verification and cleanup");
+
+    const tokens = readAllSessionTokensFromFile();
+
+    if (tokens.length === 0) {
+      log("No tokens found to verify", "warning");
+      return 0;
+    }
+
+    log(`Verifying ${tokens.length} tokens...`, "info");
+
+    const validTokens = [];
+
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      log(`Verifying token ${i + 1}/${tokens.length}...`, "info");
+
+      const isValid = await verifyToken(token);
+
+      if (isValid) {
+        validTokens.push(token);
+        log(`Token ${i + 1}/${tokens.length} is valid`, "success");
+      } else {
+        log(`Token ${i + 1}/${tokens.length} is invalid or expired`, "warning");
+      }
+    }
+
+    fs.writeFileSync(
+      SESSION_TOKEN_PATH,
+      validTokens.join("\n") + (validTokens.length > 0 ? "\n" : "")
+    );
+
+    log(
+      `Token verification complete. ${validTokens.length}/${tokens.length} tokens are valid`,
+      validTokens.length > 0 ? "success" : "warning"
+    );
+    logToFile("Token verification and cleanup completed", {
+      totalTokens: tokens.length,
+      validTokens: validTokens.length,
+    });
+
+    allTokens = validTokens;
+    currentTokenIndex = 0;
+
+    return validTokens.length;
+  } catch (error) {
+    log(`Error during token verification: ${error.message}`, "error");
+    logToFile("Token verification failed", { error: error.message });
+    return 0;
+  }
+}
+
+/**
  * @returns {string|null}
  */
 function getCurrentSessionToken() {
@@ -379,6 +471,8 @@ async function makeApiRequest(
 }
 
 module.exports = {
+  verifyToken,
+  verifyAndCleanupTokens,
   login,
   getUserInfo,
   getSessionToken,
