@@ -110,12 +110,26 @@ async function main() {
         const isValid = await auth.verifyToken(tokens[0]);
         if (!isValid) {
           log(
-            "Session tokens are expired. Re-authentication required.",
-            "error"
+            "Session tokens are expired. Attempting auto-refresh...",
+            "warning"
           );
-          updateStatus("Expired tokens. Press 'A' to re-authenticate", "error");
+          updateStatus("Refreshing expired tokens...", "warning");
           render();
-          return;
+
+          const refreshed = await auth.refreshExpiredToken();
+          if (!refreshed) {
+            log(
+              "Token refresh failed. Press 'A' to re-authenticate manually.",
+              "error"
+            );
+            updateStatus("Token refresh failed", "error");
+            render();
+            return;
+          }
+
+          log("Tokens refreshed successfully!", "success");
+          updateStatus("Tokens refreshed, starting automation...", "success");
+          render();
         }
 
         log("Starting automation...", "info");
@@ -162,9 +176,11 @@ async function main() {
           log("Failed to switch account", "error");
         }
       } else {
-        if (tokenInfo.hasMultipleTokens) {
-          log("Only one account available, cannot switch", "warning");
-          return;
+        if (!tokenInfo.hasMultipleTokens && tokenInfo.totalTokens > 0) {
+          log(
+            "Only one account available, refreshing token instead",
+            "warning"
+          );
         }
 
         log("Re-authenticating accounts...", "info");
@@ -172,29 +188,18 @@ async function main() {
         updateStatus("Re-authenticating...", "info");
         render();
 
-        const privateKeys = process.env.PRIVATE_KEYS
-          ? process.env.PRIVATE_KEYS.split(",")
-          : [];
-        if (privateKeys.length === 0) {
-          log("No private keys found in .env file.", "error");
-          updateStatus("Missing private keys in .env file", "error");
+        const success = await auth.refreshExpiredToken();
+        if (success) {
+          log("Re-authentication successful!", "success");
+          updateStatus(
+            "Re-authentication successful. Press S to start",
+            "success"
+          );
         } else {
-          await authenticateAllWallets(privateKeys);
-          const tokens = auth.readAllSessionTokensFromFile();
-          if (tokens.length > 0) {
-            log(
-              `Re-authentication successful! ${tokens.length} accounts ready.`,
-              "success"
-            );
-            updateStatus(
-              `${tokens.length} accounts ready. Press S to start`,
-              "success"
-            );
-          } else {
-            log("Re-authentication failed. No valid tokens received.", "error");
-            updateStatus("Re-authentication failed", "error");
-          }
+          log("Re-authentication failed.", "error");
+          updateStatus("Re-authentication failed", "error");
         }
+        render();
       }
     });
 

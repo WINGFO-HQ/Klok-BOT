@@ -231,6 +231,59 @@ function getAuthHeaders(headers = {}) {
 }
 
 /**
+ * Refresh expired token by re-authenticating with wallet private keys
+ * @returns {Promise<boolean>}
+ */
+async function refreshExpiredToken() {
+  try {
+    log("Token expired, attempting automatic refresh...", "warning");
+    logToFile("Automatic token refresh initiated");
+
+    const privateKeys = process.env.PRIVATE_KEYS
+      ? process.env.PRIVATE_KEYS.split(",")
+      : [];
+
+    if (privateKeys.length === 0) {
+      log("No private keys found in .env file for token refresh", "error");
+      logToFile("Token refresh failed - no private keys available");
+      return false;
+    }
+
+    log(
+      `Found ${privateKeys.length} private keys. Re-authenticating...`,
+      "info"
+    );
+
+    const { authenticateAllWallets } = require("./signin");
+    const newTokens = await authenticateAllWallets(privateKeys);
+
+    if (newTokens.length === 0) {
+      log("Re-authentication failed. No valid tokens received.", "error");
+      logToFile("Token refresh failed - authentication returned no tokens");
+      return false;
+    }
+
+    log(
+      `Re-authentication successful! ${newTokens.length} accounts refreshed.`,
+      "success"
+    );
+    logToFile("Token refresh successful", {
+      tokenCount: newTokens.length,
+    });
+
+    allTokens = readAllSessionTokensFromFile();
+    currentTokenIndex = 0;
+    sessionToken = allTokens[currentTokenIndex];
+
+    return true;
+  } catch (error) {
+    log(`Token refresh error: ${error.message}`, "error");
+    logToFile("Token refresh error", { error: error.message });
+    return false;
+  }
+}
+
+/**
  * @param {Function} requestFn
  * @param {string} requestName
  * @param {number} retryCount
@@ -252,19 +305,38 @@ async function executeWithRetry(requestFn, requestName, retryCount = 0) {
       error.response &&
       (error.response.status === 401 || error.response.status === 403);
 
-    if (isAuthError && allTokens.length > 1) {
-      logToFile(
-        `Auth error with current token, switching to next token`,
-        {
-          error: error.message,
-          previousTokenIndex: currentTokenIndex,
-        },
-        false
-      );
+    if (isAuthError) {
+      if (allTokens.length > 1) {
+        logToFile(
+          `Auth error with current token, switching to next token`,
+          {
+            error: error.message,
+            previousTokenIndex: currentTokenIndex,
+          },
+          false
+        );
 
-      switchToNextToken();
+        switchToNextToken();
+        return executeWithRetry(
+          requestFn,
+          `${requestName} (with new token)`,
+          0
+        );
+      }
 
-      return executeWithRetry(requestFn, `${requestName} (with new token)`, 0);
+      logToFile("Auth error with all tokens, attempting automatic refresh", {
+        error: error.message,
+      });
+
+      const refreshed = await refreshExpiredToken();
+      if (refreshed) {
+        log("Token refreshed successfully, retrying request", "success");
+        return executeWithRetry(
+          requestFn,
+          `${requestName} (with refreshed token)`,
+          0
+        );
+      }
     }
 
     if ((isNetworkError || isServerError) && retryCount < MAX_RETRIES) {
@@ -356,6 +428,16 @@ async function login(switchToken = false) {
       if (allTokens.length > 1) {
         log("Token invalid, trying next token...", "warning");
         switchToNextToken();
+        return login(false);
+      }
+
+      log(
+        "Token invalid and no alternatives available, attempting refresh...",
+        "warning"
+      );
+      const refreshed = await refreshExpiredToken();
+      if (refreshed) {
+        log("Tokens refreshed successfully, retrying login", "success");
         return login(false);
       }
 
@@ -483,4 +565,5 @@ module.exports = {
   makeApiRequest,
   executeWithRetry,
   readAllSessionTokensFromFile,
+  refreshExpiredToken,
 };

@@ -494,8 +494,37 @@ async function automationLoop() {
         if (tokenInfo.hasMultipleTokens) {
           await switchAccount();
         } else {
-          log("No alternative accounts available", "error");
-          throw chatError;
+          log(
+            "Authentication error with only account, attempting to refresh token...",
+            "warning"
+          );
+
+          updateStatus("Refreshing token...", "warning");
+          render();
+
+          const refreshed = await auth.refreshExpiredToken();
+          if (refreshed) {
+            log(
+              "Token refreshed successfully, continuing automation",
+              "success"
+            );
+            updateStatus("Token refreshed successfully", "success");
+            render();
+
+            setTimeout(() => {
+              if (isRunning) {
+                updateStatusWithTimers();
+                automationLoop();
+              }
+            }, 5000);
+            return;
+          } else {
+            log("Token refresh failed, automation paused", "error");
+            updateStatus("Token refresh failed", "error");
+            isRunning = false;
+            render();
+            return;
+          }
         }
       } else if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
         log(
@@ -626,6 +655,31 @@ async function automationLoop() {
           }, 5000);
 
           return;
+        } else {
+          // For single account, try to refresh token
+          log(
+            "Authentication error with only account, attempting to refresh token...",
+            "warning"
+          );
+          updateStatus("Refreshing token...", "warning");
+          render();
+
+          const refreshed = await auth.refreshExpiredToken();
+          if (refreshed) {
+            log("Token refreshed successfully, retrying", "success");
+            updateStatus("Token refreshed successfully", "success");
+            render();
+
+            await auth.login();
+
+            setTimeout(() => {
+              if (isRunning) {
+                updateStatusWithTimers();
+                automationLoop();
+              }
+            }, 5000);
+            return;
+          }
         }
       }
 
@@ -652,10 +706,6 @@ async function manualSwitchAccount() {
   return await switchAccount();
 }
 
-/**
- * Get the current running state
- * @returns {boolean}
- */
 function getRunningState() {
   return isRunning;
 }

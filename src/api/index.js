@@ -8,6 +8,7 @@ module.exports = {
   auth: {
     ...auth,
     readAllSessionTokensFromFile: auth.readAllSessionTokensFromFile,
+    refreshExpiredToken: auth.refreshExpiredToken,
   },
   chat,
   models,
