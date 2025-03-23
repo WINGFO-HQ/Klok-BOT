@@ -254,14 +254,55 @@ async function refreshExpiredToken() {
       "info"
     );
 
+    const { Wallet } = require("ethers");
+    const walletAddresses = privateKeys
+      .map((pk) => {
+        try {
+          const wallet = new Wallet(pk.trim());
+          return wallet.address.toLowerCase();
+        } catch (err) {
+          return null;
+        }
+      })
+      .filter((addr) => addr !== null);
+
+    log(
+      `Identified ${walletAddresses.length} wallet addresses for refresh`,
+      "info"
+    );
+    logToFile("Refreshing tokens for wallets", {
+      walletCount: walletAddresses.length,
+      addresses: walletAddresses.map((addr) => addr.substring(0, 10) + "..."),
+    });
+
+    const oldTokens = readAllSessionTokensFromFile();
+    logToFile("Current tokens before refresh", {
+      tokenCount: oldTokens.length,
+      tokenPreviews: oldTokens.map((t) => t.substring(0, 10) + "..."),
+    });
+
+    fs.writeFileSync(SESSION_TOKEN_PATH, "");
+    logToFile("Cleared token file before refresh");
+
     const { authenticateAllWallets } = require("./signin");
-    const newTokens = await authenticateAllWallets(privateKeys);
+    await authenticateAllWallets(privateKeys);
+
+    const newTokens = readAllSessionTokensFromFile();
 
     if (newTokens.length === 0) {
       log("Re-authentication failed. No valid tokens received.", "error");
       logToFile("Token refresh failed - authentication returned no tokens");
+
+      fs.writeFileSync(
+        SESSION_TOKEN_PATH,
+        oldTokens.join("\n") + (oldTokens.length > 0 ? "\n" : "")
+      );
+      logToFile("Restored previous tokens since no new ones were obtained");
+
       return false;
     }
+
+    await verifyAndCleanupTokens();
 
     log(
       `Re-authentication successful! ${newTokens.length} accounts refreshed.`,
@@ -269,6 +310,7 @@ async function refreshExpiredToken() {
     );
     logToFile("Token refresh successful", {
       tokenCount: newTokens.length,
+      newTokenPreviews: newTokens.map((t) => t.substring(0, 10) + "..."),
     });
 
     allTokens = readAllSessionTokensFromFile();
