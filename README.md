@@ -62,11 +62,18 @@ klokapp-automation/
      ```
 
 5. **Groq API Key** (Required):
+
    - Get your API key from [Groq](https://console.groq.com/)
    - Edit `groq-api.key` file with this key:
      ```
      echo "YOUR_GROQ_API_KEY_HERE" > groq-api.key
      ```
+
+6. **Setting up Capsolver** (Required):
+   - Sign up for an account at [Capsolver](https://dashboard.capsolver.com/passport/register?inviteCode=xKsR4q_FOQ5o)
+   - Add funds to your account
+   - Get your API key from your dashboard
+   - Edit file named `capsolver-api.key` in the project root:
 
 ## Running
 

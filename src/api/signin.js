@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const path = require("path");
 const config = require("../../config");
 const { log, logToFile } = require("../utils");
+const { getRecaptchaToken } = require("../services/recaptcha");
 
 async function signMessage(wallet) {
   const nonce = generateNonce();
@@ -35,21 +36,35 @@ async function authenticate(wallet) {
   try {
     const signResult = await signMessage(wallet);
 
+    const recaptchaToken = await getRecaptchaToken();
+
+    if (!recaptchaToken) {
+      log(
+        `[WARNING] Failed to obtain reCAPTCHA token. Authentication may fail.`,
+        "warning"
+      );
+      logToFile(`Authentication without reCAPTCHA token may fail`, {
+        address: wallet.address,
+      });
+    }
+
     const payload = {
-      signedMessage: signResult.signature,
       message: signResult.message,
-      referral_code: `${config.REFERRAL_CODE}`,
+      recaptcha_token: recaptchaToken || "",
+      referral_code: config.REFERRAL_CODE.referral_code,
+      signedMessage: signResult.signature,
     };
 
     log(`[INFO] Authenticating for ${wallet.address}...`, "info");
     logToFile(`Authenticating wallet`, {
       address: wallet.address,
       addressPreview: wallet.address.substring(0, 10) + "...",
+      hasRecaptchaToken: !!recaptchaToken,
     });
 
     const response = await axios.post(`${config.BASE_URL}/verify`, payload, {
       headers: config.DEFAULT_HEADERS,
-      timeout: 60000, // Timeout 60s
+      timeout: 60000,
     });
 
     const { session_token } = response.data;
